@@ -1,0 +1,33 @@
+version: 2
+
+models:
+  - name: ml_job_features
+    description: >
+      Leakage-safe Job-run-level feature snapshot used for
+      temporal modeling in DataFlow Sentinel.
+
+    columns:
+
+      - name: job_run_id
+        data_tests:
+          - not_null
+          - unique
+
+      - name: split_timestamp
+        description: >
+          Used only for chronological splitting.
+          It is not supplied as a model feature.
+        data_tests:
+          - not_null
+
+      - name: failed_job
+        description: Modeling target only.
+        data_tests:
+          - not_null
+
+          - accepted_values:
+              arguments:
+                values:
+                  - 0
+                  - 1
+                quote: false

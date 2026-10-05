@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: stg_batch_tasks
+    description: >
+      Canonical Silver task-level model for DataFlow Sentinel.
+
+    columns:
+
+      - name: task_key
+        description: Unique identifier for a Task within a Job run.
+        data_tests:
+          - not_null
+          - unique
+
+      - name: job_run_id
+        data_tests:
+          - not_null
+
+      - name: task_name
+        data_tests:
+          - not_null
+
+      - name: task_status
+        data_tests:
+          - not_null
+
+          - accepted_values:
+              arguments:
+                values:
+                  - terminated
+                  - running
+                  - failed
+                  - waiting

@@ -1,0 +1,64 @@
+# Local configuration
+.env
+.env.*
+!.env.example
+!.env.template
+profiles.yml
+profiles.yaml
+.streamlit/secrets.toml
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+
+# Local datasets and generated artifacts
+/data/
+/artifacts/
+
+# dbt generated files
+/dbt/**/target/
+/dbt/**/logs/
+/dbt/**/dbt_packages/
+/dbt/**/.user.yml
+
+# Logs and backups
+logs/
+*.log
+*.bak
+*.bak-*
+
+# Local archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Frozen HGB V2 demo artifacts
+!/artifacts/
+/artifacts/*
+!/artifacts/models/
+/artifacts/models/*
+!/artifacts/models/hgb_v2_20261002T104801_398392Z/
+/artifacts/models/hgb_v2_20261002T104801_398392Z/*
+!/artifacts/models/hgb_v2_20261002T104801_398392Z/model_bundle.joblib
+!/artifacts/models/hgb_v2_20261002T104801_398392Z/metadata.json
+!/artifacts/models/hgb_v2_20261002T104801_398392Z/validation_test_metrics.csv
+!/artifacts/models/hgb_v2_20261002T104801_398392Z/error_analysis_by_task_type.csv
+!/artifacts/models/hgb_v2_20261002T104801_398392Z/error_analysis_by_task_type_and_instances.csv
+
+# Original mixed exploration notebook (kept locally)
+/notebooks/01_data_explotation.ipynb

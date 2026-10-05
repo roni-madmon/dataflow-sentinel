@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: dataflow_source
+    schema: staging
+
+    tables:
+      - name: batch_tasks_source
+        description: >
+          Bronze batch task data loaded from Parquet
+          into PostgreSQL without business transformations.
+        

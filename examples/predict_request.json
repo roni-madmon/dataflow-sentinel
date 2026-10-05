@@ -1,0 +1,17 @@
+{
+  "job_run_id": "demo-job-001",
+  "features": {
+    "task_count": 1,
+    "mean_task_plan_cpu": 100.0,
+    "max_task_plan_cpu": 100.0,
+    "total_task_plan_cpu": 100.0,
+    "mean_task_plan_mem": 0.1,
+    "max_task_plan_mem": 0.1,
+    "total_task_plan_mem": 0.1,
+    "missing_plan_cpu_flag": 0,
+    "missing_plan_mem_flag": 0,
+    "total_instances": 1,
+    "missing_instance_num_flag": 0,
+    "task_type_group": "type_10"
+  }
+}

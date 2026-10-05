@@ -1,0 +1,5 @@
+# Add API dependencies to the existing training environment.
+# Keep ML versions aligned with the model's metadata.json.
+fastapi==0.142.2
+pydantic>=2.9,<3
+uvicorn==0.54.0

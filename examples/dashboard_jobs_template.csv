@@ -1,0 +1,3 @@
+job_run_id,task_count,mean_task_plan_cpu,max_task_plan_cpu,total_task_plan_cpu,mean_task_plan_mem,max_task_plan_mem,total_task_plan_mem,missing_plan_cpu_flag,missing_plan_mem_flag,total_instances,missing_instance_num_flag,task_type_group
+demo-job-001,1,100,100,100,0.1,0.1,0.1,0,0,1,0,type_10
+demo-job-002,1,100,100,100,0.1,0.1,0.1,0,0,128,0,type_1

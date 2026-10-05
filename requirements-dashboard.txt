@@ -1,0 +1,2 @@
+# Install in the existing project environment; preserve the model's ML versions.
+streamlit==1.64.0

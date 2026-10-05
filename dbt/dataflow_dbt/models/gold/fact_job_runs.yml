@@ -1,0 +1,53 @@
+version: 2
+
+models:
+  - name: fact_job_runs
+    description: >
+      Gold Job-run-level model containing one row per resolved
+      Job run and the validated failed_job target.
+
+    columns:
+
+      - name: job_run_id
+        description: Unique identifier for a Job run.
+        data_tests:
+          - not_null
+          - unique
+
+      - name: task_count
+        data_tests:
+          - not_null
+
+      - name: run_start_time
+        description: >
+          Earliest observed task start time. Used for chronological
+          ordering and temporal splitting, not as a model feature.
+        data_tests:
+          - not_null
+
+      - name: failed_job
+        description: >
+          Target. 1 if at least one Task failed, 0 if all Tasks
+          terminated successfully.
+        data_tests:
+          - not_null
+
+          - accepted_values:
+              arguments:
+                values:
+                  - 0
+                  - 1
+                quote: false
+    dataflow_dbt:
+
+    staging:
+      +materialized: view
+      +schema: staging
+
+    gold:
+      +materialized: table
+      +schema: gold
+
+    features:
+      +materialized: table
+      +schema: ml
