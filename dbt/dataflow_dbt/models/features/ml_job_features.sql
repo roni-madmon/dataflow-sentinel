@@ -14,7 +14,7 @@ select
     -- Not a model feature.
     run_start_time as split_timestamp,
 
-    -- Leakage-safe pre-run features
+    -- Candidate input features; pre-run availability requires verification.
     task_count,
 
     mean_task_plan_cpu,

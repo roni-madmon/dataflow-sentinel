@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timezone
 import json
 
 import duckdb
@@ -17,7 +18,7 @@ RAW_GLOB = (
 REPORT_DIR = PROJECT_ROOT / "data" / "validation"
 REPORT_PATH = REPORT_DIR / "job_run_contract_report.json"
 
-RAW_GLOB_SQL = RAW_GLOB.as_posix()
+RAW_GLOB_SQL = RAW_GLOB.as_posix().replace("'", "''")
 
 
 def validate_job_run_contract() -> None:
@@ -37,16 +38,16 @@ def validate_job_run_contract() -> None:
             COUNT(DISTINCT job_name) AS unique_job_names,
 
             COUNT(
-                DISTINCT job_name || '|' || task_name
+                DISTINCT ROW(job_name, task_name)
             ) AS unique_job_task_pairs,
 
             SUM(
-                CASE WHEN job_name IS NULL
+                CASE WHEN job_name IS NULL OR TRIM(CAST(job_name AS VARCHAR)) = ''
                 THEN 1 ELSE 0 END
             ) AS missing_job_name,
 
             SUM(
-                CASE WHEN task_name IS NULL
+                CASE WHEN task_name IS NULL OR TRIM(CAST(task_name AS VARCHAR)) = ''
                 THEN 1 ELSE 0 END
             ) AS missing_task_name
 
@@ -61,6 +62,10 @@ def validate_job_run_contract() -> None:
         missing_job_name,
         missing_task_name,
     ) = grain
+
+    if total_task_rows == 0:
+        con.close()
+        raise SystemExit("No task rows found; contract validation failed.")
 
     duplicate_job_task_pairs = con.execute(
         f"""
@@ -92,26 +97,32 @@ def validate_job_run_contract() -> None:
                 COUNT(*) AS task_count,
 
                 SUM(
-                    CASE WHEN status = 'Failed'
+                    CASE WHEN LOWER(TRIM(status)) = 'failed'
                     THEN 1 ELSE 0 END
                 ) AS failed_tasks,
 
                 SUM(
-                    CASE WHEN status = 'Running'
+                    CASE WHEN LOWER(TRIM(status)) = 'running'
                     THEN 1 ELSE 0 END
                 ) AS running_tasks,
 
                 SUM(
-                    CASE WHEN status = 'Waiting'
+                    CASE WHEN LOWER(TRIM(status)) = 'waiting'
                     THEN 1 ELSE 0 END
                 ) AS waiting_tasks,
 
                 SUM(
-                    CASE WHEN status = 'Terminated'
+                    CASE WHEN LOWER(TRIM(status)) = 'terminated'
                     THEN 1 ELSE 0 END
                 ) AS terminated_tasks,
 
-                MIN(start_time) AS run_start_time,
+                MIN(
+                    CASE
+                        WHEN LOWER(TRIM(status)) = 'waiting' AND start_time = 0
+                            THEN NULL
+                        ELSE start_time
+                    END
+                ) AS run_start_time,
                 MAX(end_time) AS run_end_time
 
             FROM read_parquet('{RAW_GLOB_SQL}')
@@ -144,10 +155,7 @@ def validate_job_run_contract() -> None:
             SUM(
                 CASE
                     WHEN failed_tasks = 0
-                    AND (
-                        running_tasks > 0
-                        OR waiting_tasks > 0
-                    )
+                    AND terminated_tasks < task_count
                     THEN 1
                     ELSE 0
                 END
@@ -201,28 +209,37 @@ def validate_job_run_contract() -> None:
     # 3. Check timestamp availability for labeled Jobs
     # ---------------------------------------------------------
 
-    labeled_missing_start = con.execute(
+    labeled_time_summary = con.execute(
         f"""
         WITH job_runs AS (
             SELECT
                 job_name,
+                COUNT(*) AS task_count,
+                SUM(CASE WHEN LOWER(TRIM(status)) = 'terminated'
+                    THEN 1 ELSE 0 END) AS terminated_tasks,
 
                 SUM(
-                    CASE WHEN status = 'Failed'
+                    CASE WHEN LOWER(TRIM(status)) = 'failed'
                     THEN 1 ELSE 0 END
                 ) AS failed_tasks,
 
                 SUM(
-                    CASE WHEN status = 'Running'
+                    CASE WHEN LOWER(TRIM(status)) = 'running'
                     THEN 1 ELSE 0 END
                 ) AS running_tasks,
 
                 SUM(
-                    CASE WHEN status = 'Waiting'
+                    CASE WHEN LOWER(TRIM(status)) = 'waiting'
                     THEN 1 ELSE 0 END
                 ) AS waiting_tasks,
 
-                MIN(start_time) AS run_start_time
+                MIN(
+                    CASE
+                        WHEN LOWER(TRIM(status)) = 'waiting' AND start_time = 0
+                            THEN NULL
+                        ELSE start_time
+                    END
+                ) AS run_start_time
 
             FROM read_parquet('{RAW_GLOB_SQL}')
 
@@ -240,22 +257,40 @@ def validate_job_run_contract() -> None:
                     failed_tasks = 0
                     AND running_tasks = 0
                     AND waiting_tasks = 0
+                    AND terminated_tasks = task_count
                 )
         )
 
-        SELECT COUNT(*)
+        SELECT
+            COUNT(*) FILTER (WHERE run_start_time IS NULL),
+            COUNT(*) FILTER (WHERE run_start_time <= 0)
         FROM labeled
-        WHERE run_start_time IS NULL
         """
-    ).fetchone()[0]
+    ).fetchone()
+    labeled_missing_start, labeled_nonpositive_start = labeled_time_summary
 
     # ---------------------------------------------------------
     # 4. Contract checks
     # ---------------------------------------------------------
 
+    unknown_status_rows = con.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM read_parquet('{RAW_GLOB_SQL}')
+        WHERE status IS NULL
+           OR LOWER(TRIM(status)) NOT IN
+               ('failed', 'terminated', 'running', 'waiting')
+        """
+    ).fetchone()[0]
+
     checks = {
-        "job_name_not_null": missing_job_name == 0,
-        "task_name_not_null": missing_task_name == 0,
+        "task_status_values_known": unknown_status_rows == 0,
+        "target_partition_complete": (
+            failed_job_runs + successful_job_runs + unresolved_job_runs
+            == total_job_runs
+        ),
+        "job_name_not_null_or_blank": missing_job_name == 0,
+        "task_name_not_null_or_blank": missing_task_name == 0,
         "job_task_pair_unique": duplicate_job_task_pairs == 0,
         "aggregation_matches_unique_jobs":
             total_job_runs == unique_job_names,
@@ -367,7 +402,16 @@ def validate_job_run_contract() -> None:
     )
 
     report = {
+        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+        "validation_scope": "structural_grain_and_target_rules",
+        "unverified_assumptions": [
+            "job_name identifies one execution; uniqueness checks alone do not establish this",
+            "all model inputs are available before job start",
+        ],
         "grain": {
+            "missing_or_blank_job_names": missing_job_name,
+            "missing_or_blank_task_names": missing_task_name,
+            "unknown_status_rows": unknown_status_rows,
             "total_task_rows": total_task_rows,
             "unique_job_names": unique_job_names,
             "unique_job_task_pairs":
@@ -388,10 +432,12 @@ def validate_job_run_contract() -> None:
                 failure_rate,
         },
         "temporal": {
+            "labeled_jobs_nonpositive_start": labeled_nonpositive_start,
+            "nonpositive_start_policy": "exclude from chronological modeling splits",
             "labeled_jobs_missing_run_start":
                 labeled_missing_start,
             "split_timestamp":
-                "minimum task start_time",
+                "minimum task start_time, ignoring waiting tasks with start_time=0",
             "timestamp_usage":
                 "temporal ordering only - not a model feature",
         },
@@ -403,7 +449,7 @@ def validate_job_run_contract() -> None:
             "negative_target":
                 "all tasks terminal-successful",
             "unresolved_policy":
-                "exclude jobs with Running/Waiting and no failure",
+                "exclude all jobs without a known positive or negative target",
             "raw_job_name_model_feature":
                 False,
             "start_time_model_feature":
@@ -436,6 +482,9 @@ def validate_job_run_contract() -> None:
     )
 
     con.close()
+
+    if not all_passed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

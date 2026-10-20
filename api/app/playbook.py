@@ -3,9 +3,10 @@
 from .schemas import JobFeatures
 
 EXPLANATION_NOTE = (
-    "The score is uncalibrated. Feature attributions are not available. "
-    "Recommended checks use supplied metadata and the alert decision; "
-    "they are not proven failure causes."
+    "The score is uncalibrated. SHAP factors, when present, are local "
+    "model attributions relative to a Train-only reference background; "
+    "they are not causal failure explanations. Recommended checks are "
+    "review suggestions, not proven failure causes."
 )
 
 

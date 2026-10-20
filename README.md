@@ -40,7 +40,7 @@ The prediction unit is a job run:
 
 HGB V2 uses 12 features covering task count, planned CPU and memory aggregates, missing-value flags, total instances, and task-type grouping.
 
-Job identifiers, target labels, and split timestamps are excluded from the model feature matrix. Availability of all aggregated features before execution remains an assumption requiring verification.
+Job identifiers, target labels, and split timestamps are excluded from the model feature matrix. The source data does not independently verify that all aggregated features were available before execution; pre-run availability is therefore unverified.
 
 ## Model evaluation
 
@@ -110,6 +110,8 @@ The commands below assume:
 - The existing Python 3.12 `.venv`, with ML dependencies matching the saved model metadata.
 - The saved model folder:
   `artifacts/models/hgb_v2_20261002T104801_398392Z`
+- The SHAP reference background:
+  `artifacts/explainability/shap_train_background_representative.csv`
 - Ollama running locally at `http://127.0.0.1:11434`.
 
 The API and dashboard requirements files add application dependencies. They are not a complete dependency lock for rebuilding the training environment.
@@ -136,6 +138,7 @@ After editing knowledge-base documents, run both RAG preparation scripts again.
 
 ```powershell
 $env:SENTINEL_MODEL_PATH = (Resolve-Path ".\artifacts\models\hgb_v2_20261002T104801_398392Z").Path
+$env:SENTINEL_EXPLANATION_BACKGROUND = (Resolve-Path ".\artifacts\explainability\shap_train_background_representative.csv").Path
 
 .\.venv\Scripts\python.exe -m uvicorn api.app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-access-log
 ```
@@ -201,10 +204,10 @@ To ask the local RAG assistant directly:
 ## Interpretation limits
 
 - An alert indicates that the model score reached the threshold; it does not prove that a job will fail.
-- The model does not provide verified failure causes or feature attributions.
+- Local SHAP values provide model attributions relative to a Train-only reference background; they do not establish causal failure reasons.
 - Recommended checks are review suggestions, not established causes.
 - The business simulator depends on user-supplied assumptions; its results are not measured savings.
-- The knowledge assistant currently covers the model card only.
+- The knowledge assistant currently uses the HGB V2 model card and the Job-failure investigation runbook, with retrieved-source citations and abstention for unsupported questions.
 
 ## Training notebook and model dependencies
 
@@ -216,7 +219,6 @@ Retained notebook outputs are from the original recorded run. Edited cells
 have no saved outputs; the curated notebook has not been rerun end-to-end.
 The original mixed exploration notebook is kept locally and excluded from Git.
 
-`requirements-model.txt` pins the five core ML packages to the saved artifact's
-metadata. Python 3.12.10 was used for that artifact. These pins are not a
+`requirements-model.txt` pins the core ML packages used by the saved artifact and the SHAP runtime dependency. Python 3.12.10 was used for that artifact. These pins are not a
 complete training-environment lock. Training also requires the source data,
 configured PostgreSQL/dbt models, python-dotenv, psycopg, and a Jupyter kernel.

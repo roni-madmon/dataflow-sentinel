@@ -5,7 +5,7 @@
 ) }}
 
 -- Experimental V2:
--- Assumes instance counts and task types are available before job start.
+-- Pre-run availability of instance counts and task types is unverified in the source data.
 
 with task_metadata as (
 

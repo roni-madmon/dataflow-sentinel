@@ -113,7 +113,7 @@ class PredictionResponse(StrictModel):
     model_status: str
     score_is_calibrated: Literal[False] = False
     main_risk_factors: list[dict[str, str | float]] = Field(default_factory=list)
-    explanation_status: Literal["not_available"] = "not_available"
+    explanation_status: Literal["not_available", "shap_local"] = "not_available"
     recommended_checks: list[str]
     explanation_note: str
 
@@ -146,5 +146,5 @@ class ModelInfoResponse(StrictModel):
     input_schema: dict
     alert_threshold: Score
     max_batch_size: int
-    feature_availability_status: Literal["assumed_pre_run"] = "assumed_pre_run"
-    explanation_status: Literal["not_available"] = "not_available"
+    feature_availability_status: Literal["unverified_pre_run"] = "unverified_pre_run"
+    explanation_status: Literal["not_available", "shap_local"] = "not_available"

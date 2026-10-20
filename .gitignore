@@ -62,3 +62,8 @@ Thumbs.db
 
 # Original mixed exploration notebook (kept locally)
 /notebooks/01_data_explotation.ipynb
+
+# Runtime SHAP explanation artifact
+!/artifacts/explainability/
+/artifacts/explainability/*
+!/artifacts/explainability/shap_train_background_representative.csv

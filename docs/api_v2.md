@@ -144,8 +144,9 @@ rounded before comparison. `risk_level` is `ABOVE_THRESHOLD` or
 still fail.
 
 `score_is_calibrated` is `false`, and the saved project artifact remains
-`experimental`. Model feature availability before job start is still an
-assumption, reported by `/model-info` as `assumed_pre_run`.
+`experimental`. The source data does not independently establish model-feature
+availability before job start. `/model-info` therefore reports
+`unverified_pre_run`.
 
 Local feature attributions have not been implemented. `main_risk_factors` is
 therefore empty and `explanation_status` is `not_available`. The

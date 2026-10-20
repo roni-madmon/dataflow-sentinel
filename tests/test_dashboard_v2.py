@@ -16,14 +16,14 @@ from streamlit.testing.v1 import AppTest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from dashboard.client import ApiError
-from dashboard.data import FEATURES, load_report, normalize_metrics, parse_jobs_csv, simulate
+from dashboard.data import CAPACITY_POLICIES, FEATURES, load_report, normalize_metrics, parse_jobs_csv, simulate
 
 THRESHOLD = 0.9696205830070223
 METADATA = {"model_name": "HGB V2", "created_at_utc": "2026-10-02T10:48:01.398392+00:00",
             "status": "experimental", "threshold": THRESHOLD,
             "rows": {"train": 2912014, "validation": 623763, "test": 624196},
             "test_label_time_exclusions": {"missing": 3, "invalid": 0},
-            "limitations": ["Pre-run feature availability is assumed."]}
+            "limitations": ["Pre-run feature availability is unverified."]}
 VERSION = f"{METADATA['model_name']}@{METADATA['created_at_utc']}"
 INFO = {"feature_columns": FEATURES, "model_version": VERSION, "model_name": "HGB V2",
         "model_status": "experimental", "alert_threshold": THRESHOLD,
@@ -90,6 +90,54 @@ class DashboardDataTests(unittest.TestCase):
                 parse_jobs_csv(case.to_csv(index=False).encode())
         with self.assertRaisesRegex(ValueError, "At most"):
             parse_jobs_csv(frame.to_csv(index=False).encode(), max_rows=1)
+
+    def test_capacity_policies_match_frozen_validation_analysis(self):
+        self.assertEqual(
+            list(CAPACITY_POLICIES),
+            [
+                "Constrained 5%",
+                "Balanced 7.36% (Recommended)",
+                "High Coverage 10%",
+            ],
+        )
+
+        balanced = CAPACITY_POLICIES[
+            "Balanced 7.36% (Recommended)"
+        ]
+
+        self.assertEqual(balanced["jobs"], 623763)
+        self.assertEqual(balanced["alerts"], 45909)
+        self.assertEqual(balanced["tp"], 24056)
+        self.assertEqual(balanced["fp"], 21853)
+        self.assertEqual(balanced["fn"], 2607)
+
+        result = simulate(
+            balanced["jobs"],
+            balanced["alerts"],
+            balanced["tp"],
+            balanced["fp"],
+            balanced["fn"],
+            100,
+            10,
+            .25,
+        )
+
+        self.assertEqual(
+            result["net_benefit"],
+            142310,
+        )
+
+        self.assertAlmostEqual(
+            result["net_per_1000_jobs"],
+            228.15,
+            places=2,
+        )
+
+        self.assertAlmostEqual(
+            result["break_even_prevention"],
+            .1908,
+            places=4,
+        )
 
     def test_simulator_charges_every_alert_and_retains_negative_benefit(self):
         result = simulate(624196, 19826, 2448, 17378, 2342, 100, 10, .25)
@@ -164,9 +212,135 @@ class DashboardUiTests(unittest.TestCase):
         self.at.run()
         self.assertEqual(sum(path == "/predict" for path, _ in self.calls), 1)
 
+    def test_shap_local_explanation_is_rendered(self):
+        def shap_api(base_url, path, payload=None, **kwargs):
+            if path == "/model-info":
+                info = deepcopy(INFO)
+                info["explanation_status"] = "shap_local"
+                return info
+
+            if path == "/predict":
+                return {
+                    "job_run_id": payload["job_run_id"],
+                    "request_id": "shap-request-001",
+                    "risk_score": THRESHOLD,
+                    "alert_threshold": THRESHOLD,
+                    "alert": True,
+                    "model_version": VERSION,
+                    "recommended_checks": [
+                        "Review planned resources."
+                    ],
+                    "explanation_status": "shap_local",
+                    "main_risk_factors": [
+                        {
+                            "feature": "task_type_group",
+                            "value": "type_10",
+                            "shap_value": 0.546446,
+                            "direction": "higher_score",
+                        },
+                        {
+                            "feature": "total_task_plan_mem",
+                            "value": 0.1,
+                            "shap_value": -0.007575,
+                            "direction": "lower_score",
+                        },
+                    ],
+                }
+
+            raise AssertionError(path)
+
+        with patch(
+            "dashboard.client.call_api",
+            side_effect=shap_api,
+        ):
+            at = AppTest.from_file(
+                str(ROOT / "dashboard/app.py"),
+                default_timeout=15,
+            ).run()
+
+            self.assertEqual(
+                len(at.exception),
+                0,
+                str(at.exception),
+            )
+
+            at.radio(
+                key="page"
+            ).set_value(
+                "Score jobs"
+            ).run()
+
+            next(
+                button
+                for button in at.button
+                if button.label == "Score job"
+            ).click().run()
+
+            self.assertEqual(
+                len(at.exception),
+                0,
+                str(at.exception),
+            )
+
+            self.assertTrue(
+                any(
+                    "Local model explanation"
+                    in str(item.value)
+                    for item in at.markdown
+                )
+            )
+
+            explanation_tables = [
+                item.value
+                for item in at.dataframe
+                if {
+                    "Feature",
+                    "Value",
+                    "SHAP contribution",
+                    "Effect",
+                }.issubset(
+                    set(item.value.columns)
+                )
+            ]
+
+            self.assertEqual(
+                len(explanation_tables),
+                1,
+            )
+
+            table = explanation_tables[0]
+
+            self.assertEqual(
+                list(table["Feature"]),
+                [
+                    "task_type_group",
+                    "total_task_plan_mem",
+                ],
+            )
+
+            self.assertAlmostEqual(
+                float(
+                    table.iloc[0][
+                        "SHAP contribution"
+                    ]
+                ),
+                0.546446,
+                places=6,
+            )
+
+            self.assertEqual(
+                table.iloc[0]["Effect"],
+                "Higher score",
+            )
+
+            self.assertEqual(
+                table.iloc[1]["Effect"],
+                "Lower score",
+            )
+
     def test_simulator_ui_changes_and_invalid_scenario_order(self):
         self.go("Business simulator")
-        self.assertTrue(any(m.value == "-137,060.00" for m in self.at.metric))
+        self.assertTrue(any(m.value == "142,310.00" for m in self.at.metric))
         next(s for s in self.at.slider if s.label == "Conservative prevention (%)").set_value(90).run()
         self.assert_clean()
         self.assertTrue(any("increasing order" in e.value for e in self.at.error))

@@ -38,7 +38,10 @@ LOGGER.setLevel(logging.INFO)
 LOGGER.propagate = False
 
 
-def create_app(model_path: str | Path | None = None) -> FastAPI:
+def create_app(
+    model_path: str | Path | None = None,
+    explanation_background_path: str | Path | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         configured_path = model_path or os.environ.get("SENTINEL_MODEL_PATH")
@@ -48,7 +51,51 @@ def create_app(model_path: str | Path | None = None) -> FastAPI:
         if not path.is_absolute():
             path = PROJECT_ROOT / path
         threads = int(os.environ.get("SENTINEL_MAX_THREADS", "4"))
-        predictor = JobFailurePredictor(path, max_threads=threads)
+
+        configured_background = (
+            explanation_background_path
+            or os.environ.get("SENTINEL_EXPLANATION_BACKGROUND")
+        )
+
+        background_path = None
+
+        if configured_background:
+            background_path = Path(
+                configured_background
+            ).expanduser()
+
+            if not background_path.is_absolute():
+                background_path = (
+                    PROJECT_ROOT / background_path
+                )
+
+        predictor = JobFailurePredictor(
+            path,
+            max_threads=threads,
+            explanation_background_path=background_path,
+        )
+
+        # Warm up SHAP once during API startup so the first user
+        # prediction does not pay the Numba/JIT compilation cost.
+        # Ten rows exercise the multi-row explanation path as well.
+        if predictor.explanation_available:
+            warmup_frame = pd.read_csv(
+                background_path
+            ).head(10)
+
+            # Warm the multi-row SHAP path.
+            predictor.explain_batch(
+                warmup_frame,
+                top_k=5,
+            )
+
+            # Warm the single-row path separately. SHAP/Numba may
+            # compile additional code for a one-row explanation.
+            predictor.explain_batch(
+                warmup_frame.head(1),
+                top_k=5,
+            )
+
         if predictor.feature_columns != list(JobFeatures.model_fields):
             raise RuntimeError("The loaded model does not match the API feature schema.")
         app.state.predictor = predictor
@@ -63,7 +110,7 @@ def create_app(model_path: str | Path | None = None) -> FastAPI:
         title="DataFlow Sentinel", version=API_VERSION, lifespan=lifespan,
         description=(
             "Local experimental Job-risk scoring. Scores are uncalibrated; "
-            "pre-run feature availability remains an assumption."
+            "pre-run feature availability is unverified in the source data."
         ),
     )
 
@@ -124,8 +171,20 @@ def create_app(model_path: str | Path | None = None) -> FastAPI:
         frame = pd.DataFrame([job.features.model_dump() for job in jobs])
         try:
             predictions = predictor.predict_batch(frame)
+
+            if predictor.explanation_available:
+                explanations = predictor.explain_batch(
+                    frame,
+                    top_k=5,
+                )
+            else:
+                explanations = [None] * len(jobs)
+
         except (ValueError, TypeError, OverflowError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=422,
+                detail=str(exc),
+            ) from exc
         scores = predictions["score"]
         request.state.score_summary = {
             "jobs_scored": len(jobs),
@@ -144,10 +203,28 @@ def create_app(model_path: str | Path | None = None) -> FastAPI:
                 risk_level="ABOVE_THRESHOLD" if row.alert else "BELOW_THRESHOLD",
                 model_version=app.state.model_version,
                 **info,
-                recommended_checks=recommended_checks(job.features, bool(row.alert)),
+                main_risk_factors=(
+                    explanation["factors"]
+                    if explanation is not None
+                    else []
+                ),
+                explanation_status=(
+                    "shap_local"
+                    if explanation is not None
+                    else "not_available"
+                ),
+                recommended_checks=recommended_checks(
+                    job.features,
+                    bool(row.alert),
+                ),
                 explanation_note=EXPLANATION_NOTE,
             )
-            for job, row in zip(jobs, predictions.itertuples(index=False), strict=True)
+            for job, row, explanation in zip(
+                jobs,
+                predictions.itertuples(index=False),
+                explanations,
+                strict=True,
+            )
         ]
 
     @app.get("/health", response_model=HealthResponse)
@@ -170,6 +247,11 @@ def create_app(model_path: str | Path | None = None) -> FastAPI:
             input_schema=JobFeatures.model_json_schema(),
             alert_threshold=predictor.threshold,
             max_batch_size=MAX_BATCH_SIZE,
+            explanation_status=(
+                "shap_local"
+                if predictor.explanation_available
+                else "not_available"
+            ),
         )
 
     @app.post("/predict", response_model=PredictionResponse)

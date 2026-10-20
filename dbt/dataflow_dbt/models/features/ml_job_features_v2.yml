@@ -4,7 +4,7 @@ models:
   - name: ml_job_features_v2
     description: >
       Experimental job features including instance counts and task types.
-      Their availability before job start is an assumption requiring validation.
+      Their availability before job start is not independently established by the source data and remains unverified.
 
     columns:
       - name: job_run_id

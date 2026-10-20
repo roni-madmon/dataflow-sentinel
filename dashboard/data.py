@@ -17,6 +17,45 @@ FEATURES = [
 ]
 
 
+# Frozen Validation operating policies.
+#
+# These counts come from the exact-capacity analysis performed on the
+# development Validation population. Test was not used to select them.
+#
+# Exact queue sizes are obtained by sorting risk score descending and,
+# when scores are tied, using a deterministic md5(job_run_id) ordering.
+# The tie-break is operational only and does not imply a difference in risk.
+CAPACITY_POLICIES = {
+    "Constrained 5%": {
+        "capacity_pct": 5.0,
+        "jobs": 623763,
+        "alerts": 31189,
+        "tp": 16481,
+        "fp": 14708,
+        "fn": 10182,
+        "cutoff": 0.9696205830070223,
+    },
+    "Balanced 7.36% (Recommended)": {
+        "capacity_pct": 7.36,
+        "jobs": 623763,
+        "alerts": 45909,
+        "tp": 24056,
+        "fp": 21853,
+        "fn": 2607,
+        "cutoff": 0.9696205830070223,
+    },
+    "High Coverage 10%": {
+        "capacity_pct": 10.0,
+        "jobs": 623763,
+        "alerts": 62377,
+        "tp": 24973,
+        "fp": 37404,
+        "fn": 1690,
+        "cutoff": 0.760995425081,
+    },
+}
+
+
 def optional_number(value):
     text = str(value).strip()
     if text.lower() in {"", "null", "none"}:

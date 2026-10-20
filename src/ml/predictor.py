@@ -19,6 +19,8 @@ import sklearn
 from sklearn.exceptions import InconsistentVersionWarning
 from threadpoolctl import threadpool_limits
 
+from .explainer import PermutationShapExplainer
+
 
 _TASK_TYPE = "task_type_group"
 _FLAGS = (
@@ -39,7 +41,13 @@ class JobFailurePredictor:
     trusted project artifact; loading user-uploaded model files is not an API.
     """
 
-    def __init__(self, bundle_path: str | Path, *, max_threads: int = 4):
+    def __init__(
+        self,
+        bundle_path: str | Path,
+        *,
+        max_threads: int = 4,
+        explanation_background_path: str | Path | None = None,
+    ):
         if isinstance(max_threads, bool) or not isinstance(max_threads, int) or max_threads < 1:
             raise ValueError("max_threads must be a positive integer.")
 
@@ -106,6 +114,18 @@ class JobFailurePredictor:
             "score_is_calibrated": False,
         }
 
+        self._explainer = None
+
+        if explanation_background_path is not None:
+            self._explainer = PermutationShapExplainer(
+                pipeline=self._pipeline,
+                background_path=explanation_background_path,
+                feature_columns=self._columns,
+                feature_dtypes=self._dtypes,
+                positive_index=self._positive_index,
+                max_threads=self._max_threads,
+            )
+
     @property
     def threshold(self) -> float:
         """The full-precision threshold frozen before Test evaluation."""
@@ -125,6 +145,11 @@ class JobFailurePredictor:
     def model_info(self) -> dict[str, Any]:
         """Public model identity and score interpretation."""
         return self._model_info.copy()
+
+    @property
+    def explanation_available(self) -> bool:
+        """Whether validated local SHAP explanations are configured."""
+        return self._explainer is not None
 
     def _prepare_features(self, features: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(features, pd.DataFrame):
@@ -200,6 +225,27 @@ class JobFailurePredictor:
                 "alert": scores >= self._threshold,
             },
             index=features.index,
+        )
+
+    def explain_batch(
+        self,
+        features: pd.DataFrame,
+        *,
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Return validated SHAP attributions for one or more Jobs."""
+
+        if self._explainer is None:
+            raise RuntimeError(
+                "Explainability is not configured. "
+                "Provide explanation_background_path when loading the predictor."
+            )
+
+        prepared = self._prepare_features(features)
+
+        return self._explainer.explain_prepared(
+            prepared,
+            top_k=top_k,
         )
 
     def predict_one(self, features: Mapping[str, Any]) -> dict[str, Any]:

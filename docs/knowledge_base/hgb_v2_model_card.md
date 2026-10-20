@@ -1,4 +1,4 @@
-﻿# HGB V2 - Job Failure Prediction
+# HGB V2 - Job Failure Prediction
 
 Source: DataFlow Sentinel notebook evaluation outputs.
 Model artifact: hgb_v2_20261002T104801_398392Z
@@ -36,6 +36,6 @@ The score is not calibrated and must not be interpreted as a failure probability
 ## Limitations
 
 Performance was lower on Test than on Validation.
-Availability of all input features before job execution remains an assumption requiring verification.
-The model does not provide verified failure causes or feature attributions.
+The source data does not independently establish that all input features were available before job execution; pre-run availability remains unverified.
+Local SHAP explanations provide model attributions relative to a Train-only reference background; they do not establish verified or causal failure reasons.
 An alert indicates that the score reached the threshold; it does not prove that a job will fail.

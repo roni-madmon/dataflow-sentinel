@@ -3,7 +3,7 @@ version: 2
 models:
   - name: ml_job_features
     description: >
-      Leakage-safe Job-run-level feature snapshot used for
+      Experimental Job-run-level feature snapshot with unverified pre-run availability, used for
       temporal modeling in DataFlow Sentinel.
 
     columns:

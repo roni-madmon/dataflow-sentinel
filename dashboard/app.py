@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from dashboard.client import ApiError, call_api
 from dashboard.rag_page import show_rag_page
-from dashboard.data import FEATURES, load_cohorts, load_report, optional_number, parse_jobs_csv, simulate
+from dashboard.data import CAPACITY_POLICIES, FEATURES, load_cohorts, load_report, optional_number, parse_jobs_csv, simulate
 
 PAGES = ["Overview", "Score jobs", "Alert queue", "Model performance", "Business simulator", "Data quality", "Knowledge assistant"]
 HISTORY_LIMIT = 1000
@@ -57,6 +57,70 @@ def show_prediction(record):
         st.warning("This job meets or exceeds the review threshold.")
     else:
         st.info("This job is below the review threshold. Failures may still occur.")
+
+    # ------------------------------------------------------
+    # Local SHAP explanation
+    # ------------------------------------------------------
+
+    factors = record.get(
+        "main_risk_factors",
+        [],
+    )
+
+    if (
+        record.get("explanation_status") == "shap_local"
+        and factors
+    ):
+        st.write("**Local model explanation**")
+
+        explanation_rows = []
+
+        for factor in factors:
+            direction = factor.get(
+                "direction"
+            )
+
+            if direction == "higher_score":
+                effect = "Higher score"
+            elif direction == "lower_score":
+                effect = "Lower score"
+            else:
+                effect = "Neutral"
+
+            explanation_rows.append(
+                {
+                    "Feature": factor.get(
+                        "feature"
+                    ),
+                    "Value": str(
+                        factor.get(
+                            "value"
+                        )
+                    ),
+                    "SHAP contribution": factor.get(
+                        "shap_value"
+                    ),
+                    "Effect": effect,
+                }
+            )
+
+        explanation_frame = pd.DataFrame(
+            explanation_rows
+        )
+
+        st.dataframe(
+            explanation_frame,
+            hide_index=True,
+            width="stretch",
+        )
+
+        st.caption(
+            "SHAP values show how each feature moved this "
+            "model score relative to the Train-only reference "
+            "background. They are model attributions, not "
+            "proven causes of failure."
+        )
+
     st.write("**Suggested checks**")
     checks = record.get("recommended_checks", [])
     if checks:
@@ -82,7 +146,7 @@ def need_report(report, report_error):
 def overview(info, report, report_error):
     st.title("A clearer view of job risk")
     st.write("Review planned jobs, inspect model performance, and explore the cost of acting on alerts.")
-    st.caption("EXPERIMENTAL · Scores are uncalibrated · Pre-run feature availability is assumed")
+    st.caption("EXPERIMENTAL · Scores are uncalibrated · Pre-run feature availability is unverified")
     if report is not None:
         metrics = report["metrics"]
         split = "Test" if "Test" in set(metrics["split"]) else metrics.iloc[0]["split"]
@@ -252,58 +316,338 @@ def performance(report, report_error):
 
 def business(report, report_error):
     st.title("Business simulator")
-    st.write("Explore an assumed review program using the frozen model's observed alerts and detected failures.")
+    st.write(
+        "Compare the frozen Validation review-capacity policies under explicit "
+        "cost and prevention assumptions."
+    )
+
     if not need_report(report, report_error):
         return
-    metrics = report["metrics"]
-    split = st.selectbox("Evaluation population", metrics["split"].tolist(), index=len(metrics)-1)
-    row = metrics.loc[metrics["split"] == split].iloc[0]
-    st.caption(f"{row['jobs']:,} jobs · {row['true_alerts']:,} correctly flagged failures · {row['alerts']:,} alerts · {row['missed_failures']:,} missed failures")
-    a, b, c = st.columns(3)
-    with a:
-        failure_cost = st.number_input("Assumed cost per failure", min_value=0.0, value=100.0, step=10.0)
-    with b:
-        review_cost = st.number_input("Assumed cost per reviewed alert", min_value=0.0, value=10.0, step=1.0)
-    with c:
-        unit = st.selectbox("Currency / unit", ["Cost units", "ILS", "USD"])
-    st.caption("All cost and prevention inputs below are illustrative assumptions, not estimates learned from this dataset.")
-    a, b, c = st.columns(3)
-    with a:
-        conservative = st.slider("Conservative prevention (%)", 0, 100, 10)
-    with b:
-        base = st.slider("Base prevention (%)", 0, 100, 25)
-    with c:
-        optimistic = st.slider("Optimistic prevention (%)", 0, 100, 50)
-    if not conservative <= base <= optimistic:
-        st.error("Set prevention assumptions in increasing order: conservative ≤ base ≤ optimistic.")
-        return
-    counts = dict(jobs=row["jobs"], alerts=row["alerts"], tp=row["true_alerts"], fp=row["false_alerts"], fn=row["missed_failures"])
-    scenarios = []
-    for name, rate in [("Conservative", conservative), ("Base", base), ("Optimistic", optimistic)]:
-        result = simulate(**counts, failure_cost=failure_cost, review_cost=review_cost, prevention_rate=rate/100)
-        scenarios.append({"scenario": name, "prevention_pct": rate, **result})
-    result = scenarios[1]
-    a, b, c = st.columns(3)
-    a.metric(f"Base net benefit · {unit}", f"{result['net_benefit']:,.2f}")
-    b.metric(f"Base net / 1,000 jobs · {unit}", f"{result['net_per_1000_jobs']:,.2f}")
-    c.metric("Assumed prevented failures", f"{result['prevented_failures']:,.1f}")
-    if result["net_benefit"] < 0:
-        st.warning("Under the base assumptions, review costs exceed the modeled benefit.")
-    st.dataframe(pd.DataFrame(scenarios), hide_index=True, width="stretch")
-    break_even = result["break_even_prevention"]
-    if break_even is None:
-        st.caption("A break-even prevention rate is undefined because detected-failure value is zero.")
-    elif break_even > 1:
-        st.caption(f"Break-even would require {100 * break_even:.1f}% prevention, which is not feasible under these cost assumptions.")
-    else:
-        st.caption(f"Break-even prevention rate among correctly flagged failures: {100 * break_even:.1f}%.")
-    curve = pd.DataFrame([{"prevention_pct": p, "Net benefit": simulate(**counts, failure_cost=failure_cost, review_cost=review_cost, prevention_rate=p/100)["net_per_1000_jobs"], "Break even": 0.0} for p in range(101)])
-    st.line_chart(curve.set_index("prevention_pct"), x_label="Assumed prevention (%)", y_label=f"Net per 1,000 jobs · {unit}", height=300)
-    st.caption("Every alert incurs review cost. Only correctly flagged failures can be prevented in this simulation. Comparison baseline: no alert-review program; other operating costs are excluded.")
-    with st.expander("Calculation"):
-        st.code("prevented = true_alerts × assumed_prevention_rate\ngross_benefit = prevented × assumed_failure_cost\nreview_cost = alerts × assumed_cost_per_alert\nnet_benefit = gross_benefit − review_cost")
-    st.download_button("Download scenarios", pd.DataFrame(scenarios).assign(unit=unit, split=split, model_version=report["model_version"], jobs=row["jobs"], alerts=row["alerts"], true_alerts=row["true_alerts"], assumed_failure_cost=failure_cost, assumed_review_cost=review_cost).to_csv(index=False).encode("utf-8-sig"), "business_scenarios.csv", "text/csv")
 
+    st.caption(
+        "Policy selection uses Validation only. Test was not used to choose "
+        "the operating policy."
+    )
+
+    comparison_rows = []
+
+    for name, policy in CAPACITY_POLICIES.items():
+        precision = (
+            policy["tp"] / policy["alerts"]
+            if policy["alerts"]
+            else 0.0
+        )
+
+        failures = policy["tp"] + policy["fn"]
+
+        recall = (
+            policy["tp"] / failures
+            if failures
+            else 0.0
+        )
+
+        comparison_rows.append(
+            {
+                "Policy": name,
+                "Capacity": f"{policy['capacity_pct']:.2f}%",
+                "Alerts": policy["alerts"],
+                "Precision": precision,
+                "Recall": recall,
+                "Missed failures": policy["fn"],
+            }
+        )
+
+    comparison = pd.DataFrame(comparison_rows)
+
+    st.subheader("Operating-policy comparison")
+
+    display_comparison = comparison.copy()
+
+    display_comparison["Precision"] = (
+        display_comparison["Precision"]
+        .map(lambda value: f"{100 * value:.2f}%")
+    )
+
+    display_comparison["Recall"] = (
+        display_comparison["Recall"]
+        .map(lambda value: f"{100 * value:.2f}%")
+    )
+
+    st.dataframe(
+        display_comparison,
+        hide_index=True,
+        width="stretch",
+    )
+
+    policy_name = st.selectbox(
+        "Operating policy",
+        list(CAPACITY_POLICIES),
+        index=1,
+    )
+
+    policy = CAPACITY_POLICIES[policy_name]
+
+    counts = {
+        "jobs": policy["jobs"],
+        "alerts": policy["alerts"],
+        "tp": policy["tp"],
+        "fp": policy["fp"],
+        "fn": policy["fn"],
+    }
+
+    failures = policy["tp"] + policy["fn"]
+
+    precision = (
+        policy["tp"] / policy["alerts"]
+        if policy["alerts"]
+        else 0.0
+    )
+
+    recall = (
+        policy["tp"] / failures
+        if failures
+        else 0.0
+    )
+
+    a, b, c, d = st.columns(4)
+
+    a.metric(
+        "Review capacity",
+        f"{policy['capacity_pct']:.2f}%",
+    )
+
+    b.metric(
+        "Alerts",
+        f"{policy['alerts']:,}",
+    )
+
+    c.metric(
+        "Precision",
+        f"{100 * precision:.2f}%",
+    )
+
+    d.metric(
+        "Failure recall",
+        f"{100 * recall:.2f}%",
+    )
+
+    st.caption(
+        f"Validation population ? {policy['jobs']:,} jobs ? "
+        f"{policy['tp']:,} correctly flagged failures ? "
+        f"{policy['fp']:,} false alerts ? "
+        f"{policy['fn']:,} missed failures"
+    )
+
+    if policy_name == "Balanced 7.36% (Recommended)":
+        st.success(
+            "Balanced 7.36% is the default development policy. "
+            "It represents the Validation capacity elbow under the "
+            "current analysis; it is not claimed to be production-optimal."
+        )
+
+    st.caption(
+        "Exact capacity uses score descending with deterministic "
+        "md5(job_run_id) ordering inside score ties. The tie-break does "
+        "not imply a model-risk difference between tied Jobs."
+    )
+
+    a, b, c = st.columns(3)
+
+    with a:
+        failure_cost = st.number_input(
+            "Assumed cost per failure",
+            min_value=0.0,
+            value=100.0,
+            step=10.0,
+        )
+
+    with b:
+        review_cost = st.number_input(
+            "Assumed cost per reviewed alert",
+            min_value=0.0,
+            value=10.0,
+            step=1.0,
+        )
+
+    with c:
+        unit = st.selectbox(
+            "Currency / unit",
+            ["Cost units", "ILS", "USD"],
+        )
+
+    st.caption(
+        "All cost and prevention inputs below are illustrative assumptions, "
+        "not estimates learned from this dataset."
+    )
+
+    a, b, c = st.columns(3)
+
+    with a:
+        conservative = st.slider(
+            "Conservative prevention (%)",
+            0,
+            100,
+            10,
+        )
+
+    with b:
+        base = st.slider(
+            "Base prevention (%)",
+            0,
+            100,
+            25,
+        )
+
+    with c:
+        optimistic = st.slider(
+            "Optimistic prevention (%)",
+            0,
+            100,
+            50,
+        )
+
+    if not conservative <= base <= optimistic:
+        st.error(
+            "Set prevention assumptions in increasing order: "
+            "conservative ? base ? optimistic."
+        )
+        return
+
+    scenarios = []
+
+    for name, rate in [
+        ("Conservative", conservative),
+        ("Base", base),
+        ("Optimistic", optimistic),
+    ]:
+        result = simulate(
+            **counts,
+            failure_cost=failure_cost,
+            review_cost=review_cost,
+            prevention_rate=rate / 100,
+        )
+
+        scenarios.append(
+            {
+                "scenario": name,
+                "prevention_pct": rate,
+                **result,
+            }
+        )
+
+    result = scenarios[1]
+
+    a, b, c = st.columns(3)
+
+    a.metric(
+        f"Base net benefit ? {unit}",
+        f"{result['net_benefit']:,.2f}",
+    )
+
+    b.metric(
+        f"Base net / 1,000 jobs ? {unit}",
+        f"{result['net_per_1000_jobs']:,.2f}",
+    )
+
+    c.metric(
+        "Assumed prevented failures",
+        f"{result['prevented_failures']:,.1f}",
+    )
+
+    if result["net_benefit"] < 0:
+        st.warning(
+            "Under the base assumptions, review costs exceed "
+            "the modeled benefit."
+        )
+
+    st.dataframe(
+        pd.DataFrame(scenarios),
+        hide_index=True,
+        width="stretch",
+    )
+
+    break_even = result["break_even_prevention"]
+
+    if break_even is None:
+        st.caption(
+            "A break-even prevention rate is undefined because "
+            "detected-failure value is zero."
+        )
+
+    elif break_even > 1:
+        st.caption(
+            f"Break-even would require "
+            f"{100 * break_even:.1f}% prevention, which is not "
+            "feasible under these cost assumptions."
+        )
+
+    else:
+        st.caption(
+            "Break-even prevention rate among correctly flagged "
+            f"failures: {100 * break_even:.1f}%."
+        )
+
+    curve = pd.DataFrame(
+        [
+            {
+                "prevention_pct": p,
+                "Net benefit": simulate(
+                    **counts,
+                    failure_cost=failure_cost,
+                    review_cost=review_cost,
+                    prevention_rate=p / 100,
+                )["net_per_1000_jobs"],
+                "Break even": 0.0,
+            }
+            for p in range(101)
+        ]
+    )
+
+    st.line_chart(
+        curve.set_index("prevention_pct"),
+        x_label="Assumed prevention (%)",
+        y_label=f"Net per 1,000 jobs ? {unit}",
+        height=300,
+    )
+
+    st.caption(
+        "Every alert incurs review cost. Only correctly flagged failures "
+        "can be prevented in this simulation. Comparison baseline: no "
+        "alert-review program; other operating costs are excluded."
+    )
+
+    with st.expander("Calculation"):
+        st.code(
+            "prevented = true_alerts ? assumed_prevention_rate\n"
+            "gross_benefit = prevented ? assumed_failure_cost\n"
+            "review_cost = alerts ? assumed_cost_per_alert\n"
+            "net_benefit = gross_benefit ? review_cost"
+        )
+
+    export = (
+        pd.DataFrame(scenarios)
+        .assign(
+            unit=unit,
+            split="Validation",
+            operating_policy=policy_name,
+            capacity_pct=policy["capacity_pct"],
+            model_version=report["model_version"],
+            jobs=policy["jobs"],
+            alerts=policy["alerts"],
+            true_alerts=policy["tp"],
+            false_alerts=policy["fp"],
+            missed_failures=policy["fn"],
+            assumed_failure_cost=failure_cost,
+            assumed_review_cost=review_cost,
+        )
+    )
+
+    st.download_button(
+        "Download scenarios",
+        export.to_csv(index=False).encode("utf-8-sig"),
+        "business_scenarios.csv",
+        "text/csv",
+    )
 
 def quality(info, report):
     st.title("Data quality & model context")
@@ -322,7 +666,7 @@ def quality(info, report):
             if key in metadata:
                 st.write(f"**{title}**")
                 st.json(metadata[key])
-    st.info("Task types, task counts, instance counts and planned resources must be available at prediction time for a true pre-run deployment. That availability is still assumed in this experiment.")
+    st.info("Task types, task counts, instance counts and planned resources must be available at prediction time for a true pre-run deployment. The source data does not independently establish that availability, so it remains unverified.")
     if info:
         with st.expander("Active model and feature contract"):
             st.json(info)

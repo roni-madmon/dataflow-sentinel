@@ -103,8 +103,6 @@ def truncate_table(
             """
         )
 
-    connection.commit()
-
 
 def copy_dataframe(
     connection: psycopg.Connection,
@@ -154,8 +152,6 @@ def copy_dataframe(
                     break
 
                 copy.write(chunk)
-
-    connection.commit()
 
 
 def load_bronze(
@@ -271,6 +267,23 @@ def load_bronze(
             print(
                 "ROW COUNT CHECK: FAIL"
             )
+
+            raise RuntimeError(
+                "PostgreSQL row-count validation failed. "
+                "The load transaction will be rolled back."
+            )
+
+        # Commit only after every Parquet file has been copied
+        # and the final row-count validation has passed.
+        #
+        # PostgreSQL TRUNCATE is transactional, so a failure
+        # before this point preserves the previously committed
+        # staging snapshot when --replace is used.
+        connection.commit()
+
+        print(
+            "LOAD TRANSACTION: COMMITTED"
+        )
 
         print("=" * 70)
 

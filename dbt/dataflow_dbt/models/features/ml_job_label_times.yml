@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: ml_job_label_times
+    description: >
+      Event-time proxy for target availability, derived from task end times.
+      Does not measure ingestion or observation delays.
+
+    columns:
+      - name: job_run_id
+        description: Job identifier matching fact_job_runs.
+        data_tests:
+          - not_null
+          - unique
+
+      - name: label_available_time
+        description: >
+          Earliest valid failed-task end for positive labels.
+          Latest task end for negative labels, requiring valid times
+          for every task. NULL when timing cannot be established.
